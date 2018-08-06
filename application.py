@@ -22,23 +22,28 @@ Session(app)
 engine = create_engine(os.getenv("DATABASE_URL"))
 db = scoped_session(sessionmaker(bind=engine))
 
+
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if session.get("user_id") is None:
             return redirect(url_for("login"))
         return f(*args, **kwargs)
+
     return decorated_function
 
+
 def apology(message):
-    return render_template("apology.html", apology = message)
+    return render_template("apology.html", apology=message)
+
 
 @app.route("/")
 @login_required
 def index():
     return render_template("index.html")
 
-@app.route("/register", methods = ["GET", "POST"])
+
+@app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "GET":
         return render_template("register.html")
@@ -49,12 +54,14 @@ def register():
         if db.execute("SELECT * FROM users WHERE username = :username", {"username": username}).rowcount != 0:
             return apology("Username taken")
 
-        db.execute("INSERT INTO users (username, password) VALUES (:username, :password)", {"username": username, "password": password})
+        db.execute("INSERT INTO users (username, password) VALUES (:username, :password)",
+                   {"username": username, "password": password})
         db.commit()
 
         return redirect(url_for("login"))
 
-@app.route("/login", methods = ["GET", "POST"])
+
+@app.route("/login", methods=["GET", "POST"])
 def login():
     session.clear()
     if request.method == "GET":
@@ -73,10 +80,12 @@ def login():
         else:
             return apology("Wrong username or password")
 
+
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
 
 @app.route("/search", methods=["GET", "POST"])
 @login_required
@@ -88,14 +97,31 @@ def search():
         title = request.form.get("title")
         author = request.form.get("author")
         books = db.execute("SELECT * FROM books WHERE isbn = :isbn OR title = :title OR author = :author",
-                            {"isbn": isbn, "title": title, "author": author})
-        return render_template("listbooks.html", books = books)
+                           {"isbn": isbn, "title": title, "author": author})
+        return render_template("listbooks.html", books=books)
+
 
 @app.route("/review/<isbn>", methods=["GET", "POST"])
 @login_required
 def review(isbn):
+    reviews = db.execute("SELECT * FROM books LEFT JOIN reviews ON reviews.book_id = books.id WHERE isbn = :isbn",
+                      {"isbn": isbn}).fetchall()
+    book = db.execute("SELECT * FROM books WHERE isbn = :isbn", {"isbn": isbn}).fetchone()
+    json = requests.get("https://www.goodreads.com/book/review_counts.json",
+                        params={"key": "iIEWEniGZPHuDH04oIpRg", "isbns": isbn}).json()
+    details = json["books"][0]
     if request.method == "GET":
-        book = db.execute("SELECT * FROM books LEFT JOIN reviews ON reviews.book_id = books.id WHERE isbn = :isbn", {"isbn": isbn}).fetchall()
-        if book:
-            details = book[0]
-            return render_template("review.html", book = book, details = details)
+        return render_template("review.html", reviews=reviews, book=book, details=details)
+    elif request.method == "POST":
+        review = request.form.get("review")
+        book_id = book["id"]
+        user_id = session["user_id"]
+        if db.execute(
+                "SELECT review FROM books LEFT JOIN reviews ON reviews.book_id = books.id WHERE book_id = :book_id AND user_id = :user_id",
+                {"book_id": book_id, "user_id": user_id}).rowcount != 0:
+            return apology("You've reviewed this book")
+        else:
+            db.execute("INSERT INTO reviews (user_id, book_id, review) VALUES (:user_id, :book_id, :rv)",
+                       {"user_id": user_id, "book_id": book_id, "rv": review})
+            db.commit()
+            return redirect(url_for("review", isbn=isbn))
