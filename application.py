@@ -2,7 +2,7 @@ import os
 import requests
 from functools import wraps
 
-from flask import Flask, session, redirect, url_for, request, render_template
+from flask import Flask, session, redirect, url_for, request, render_template, jsonify
 from flask_session import Session
 from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -105,11 +105,12 @@ def search():
 @login_required
 def review(isbn):
     reviews = db.execute("SELECT * FROM books LEFT JOIN reviews ON reviews.book_id = books.id WHERE isbn = :isbn",
-                      {"isbn": isbn}).fetchall()
+                         {"isbn": isbn}).fetchall()
     book = db.execute("SELECT * FROM books WHERE isbn = :isbn", {"isbn": isbn}).fetchone()
     json = requests.get("https://www.goodreads.com/book/review_counts.json",
                         params={"key": "iIEWEniGZPHuDH04oIpRg", "isbns": isbn}).json()
     details = json["books"][0]
+    rating = request.form.get("rating")
     if request.method == "GET":
         return render_template("review.html", reviews=reviews, book=book, details=details)
     elif request.method == "POST":
@@ -121,7 +122,25 @@ def review(isbn):
                 {"book_id": book_id, "user_id": user_id}).rowcount != 0:
             return apology("You've reviewed this book")
         else:
-            db.execute("INSERT INTO reviews (user_id, book_id, review) VALUES (:user_id, :book_id, :rv)",
-                       {"user_id": user_id, "book_id": book_id, "rv": review})
+            db.execute("INSERT INTO reviews (user_id, book_id, review, rating) VALUES (:user_id, :book_id, :rv, :rt)",
+                       {"user_id": user_id, "book_id": book_id, "rv": review, "rt": rating})
             db.commit()
             return redirect(url_for("review", isbn=isbn))
+
+
+@app.route("/api/<isbn>")
+def api(isbn):
+    book = db.execute("SELECT * FROM books  WHERE isbn = :isbn", {"isbn": isbn}).fetchone()
+    review_counts = db.execute("SELECT COUNT(review) FROM reviews WHERE book_id = :book_id",
+                               {"book_id": book["id"]}).fetchone()
+    avg_rating = db.execute("SELECT AVG(rating) FROM reviews WHERE book_id = :book_id",
+                            {"book_id": book["id"]}).fetchone()
+    json = {
+        "title": book["title"],
+        "author": book["author"],
+        "year": book["year"],
+        "isbn": book["isbn"],
+        "review_count": review_counts["count"],
+        "average_score": float(avg_rating["avg"])
+    }
+    return jsonify(json)
